@@ -9,5 +9,6 @@ import { WorkspaceController } from './workspace.controller';
   imports: [PrismaModule],
   controllers: [AuthController, WorkspaceController],
   providers: [AuthService, BearerAuthGuard],
+  exports: [AuthService, BearerAuthGuard],
 })
 export class AuthModule {}
