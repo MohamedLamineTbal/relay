@@ -4,9 +4,9 @@
 // Get a free hosted Postgres database in seconds: `npx create-db`
 
 generator client {
-  provider = "prisma-client"
-  output   = "../generated/prisma"
-   moduleFormat = "cjs"
+  provider     = "prisma-client"
+  output       = "../generated/prisma"
+  moduleFormat = "cjs"
 }
 
 datasource db {
@@ -19,7 +19,46 @@ model User {
   password  String
   createdAt DateTime @default(now())
 
-  customers Customer[]
+  customers  Customer[]
+  membership WorkspaceMembership?
+  sessions   Session[]
+}
+
+enum WorkspaceRole {
+  OWNER
+}
+
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  memberships WorkspaceMembership[]
+}
+
+model WorkspaceMembership {
+  id        Int           @id @default(autoincrement())
+  role      WorkspaceRole @default(OWNER)
+  createdAt DateTime      @default(now())
+
+  userId      Int       @unique
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model Customer {
@@ -28,8 +67,8 @@ model Customer {
   email     String?
   createdAt DateTime @default(now())
 
-  userId    Int
-  user      User     @relation(fields: [userId], references: [id])
+  userId          Int
+  user            User             @relation(fields: [userId], references: [id])
   paymentRequests PaymentRequest[]
 }
 
@@ -46,7 +85,6 @@ model PaymentRequest {
   publicId    String               @unique @default(cuid())
   createdAt   DateTime             @default(now())
 
-  customerId  Int
-  customer    Customer             @relation(fields: [customerId], references: [id])
+  customerId Int
+  customer   Customer @relation(fields: [customerId], references: [id])
 }
-
