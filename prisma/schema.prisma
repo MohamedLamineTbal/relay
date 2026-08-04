@@ -28,9 +28,10 @@ enum WorkspaceRole {
 }
 
 model Workspace {
-  id        String   @id @default(cuid())
-  name      String
-  createdAt DateTime @default(now())
+  id              String   @id @default(cuid())
+  name            String
+  stripeAccountId String?  @unique
+  createdAt       DateTime @default(now())
 
   memberships WorkspaceMembership[]
   customers   Customer[]

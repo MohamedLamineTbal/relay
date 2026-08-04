@@ -5,9 +5,16 @@ import { PrismaModule } from './prisma/prisma.module';
 import { CustomersModule } from './customers/customers.module';
 import { PaymentRequestsModule } from './payment-requests/payment-requests.module';
 import { AuthModule } from './auth/auth.module';
+import { StripeConnectModule } from './stripe-connect/stripe-connect.module';
 
 @Module({
-  imports: [PrismaModule, CustomersModule, PaymentRequestsModule, AuthModule],
+  imports: [
+    PrismaModule,
+    CustomersModule,
+    PaymentRequestsModule,
+    AuthModule,
+    StripeConnectModule,
+  ],
   controllers: [AppController],
   providers: [AppService],
 })

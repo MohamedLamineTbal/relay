@@ -125,6 +125,59 @@ The unauthenticated buyer route `GET /pay/:publicId` returns only:
 It does not expose customer identity, internal database identifiers, workspace
 ownership, or timestamps.
 
+## Stripe Connect API
+
+Configure the platform's Stripe credentials and authenticated return locations
+through environment variables:
+
+```text
+STRIPE_SECRET_KEY=sk_test_platform_key
+STRIPE_CONNECT_REFRESH_URL=https://app.example.com/stripe/refresh
+STRIPE_CONNECT_RETURN_URL=https://app.example.com/stripe/return
+```
+
+These values are platform configuration. Clients must never send Stripe API
+keys or connected-account identifiers to the API, and the application stores
+only the connected-account identifier on the workspace.
+
+### Start or resume onboarding
+
+Send an authenticated request with no body:
+
+```text
+POST /stripe-connect/onboarding
+Authorization: Bearer <accessToken>
+```
+
+The response contains a single-use Stripe-hosted onboarding URL:
+
+```json
+{
+  "url": "https://connect.stripe.com/setup/..."
+}
+```
+
+Repeated requests reuse the workspace's connected Stripe account and create a
+fresh onboarding URL. A connected account cannot belong to two workspaces.
+
+### Inspect connection readiness
+
+`GET /stripe-connect/status` requires the bearer token and returns:
+
+```json
+{
+  "connected": true,
+  "onboardingComplete": true,
+  "paymentsReady": true
+}
+```
+
+`connected` means the workspace has a Stripe connected-account identifier.
+`onboardingComplete` reflects Stripe's submitted-account-details status.
+`paymentsReady` requires both charges to be enabled and the card-payments
+capability to be active. A workspace without a connected account returns all
+three values as `false`.
+
 ## Tests
 
 ```bash
