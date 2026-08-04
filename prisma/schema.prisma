@@ -19,7 +19,6 @@ model User {
   password  String
   createdAt DateTime @default(now())
 
-  customers  Customer[]
   membership WorkspaceMembership?
   sessions   Session[]
 }
@@ -34,6 +33,7 @@ model Workspace {
   createdAt DateTime @default(now())
 
   memberships WorkspaceMembership[]
+  customers   Customer[]
 }
 
 model WorkspaceMembership {
@@ -67,9 +67,11 @@ model Customer {
   email     String?
   createdAt DateTime @default(now())
 
-  userId          Int
-  user            User             @relation(fields: [userId], references: [id])
+  workspaceId     String
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   paymentRequests PaymentRequest[]
+
+  @@index([workspaceId])
 }
 
 enum PaymentRequestStatus {
