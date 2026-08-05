@@ -16,5 +16,6 @@ import { StripeConnectStripeProvider } from './stripe-connect.stripe-provider';
       useClass: StripeConnectStripeProvider,
     },
   ],
+  exports: [STRIPE_CONNECT_PROVIDER],
 })
 export class StripeConnectModule {}

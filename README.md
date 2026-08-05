@@ -92,24 +92,68 @@ Use `GET /customers` to list the authenticated workspace's customers and
 `GET /customers/:id` to retrieve one. A missing customer and a customer owned
 by another workspace both return the same `404 Not Found` response.
 
-## Workspace-scoped payment-request API
+## One-time Checkout payment API
 
-Create a payment request with `POST /payment-requests` and an authenticated
-workspace customer:
+Create a Stripe-hosted, one-time card payment with `POST /payment-requests`.
+The workspace must have a connected Stripe account whose onboarding is complete
+and card-payment capability is ready. Send a caller-generated retry key:
+
+```text
+Authorization: Bearer <accessToken>
+Idempotency-Key: 550e8400-e29b-41d4-a716-446655440000
+```
+
+The request identifies an authenticated-workspace customer and expresses
+`amount` as a positive whole number in the currency's smallest unit, up to the
+platform limit of `99,999,999` minor units:
 
 ```json
 {
   "description": "Engineering services",
   "amount": 12500,
+  "currency": "usd",
   "customerId": 42
 }
 ```
 
-Use `GET /payment-requests` to list the authenticated workspace's payment
-requests and `GET /payment-requests/:publicId` to retrieve one. Referencing a
-missing or cross-workspace customer during creation returns the same `404 Not
-Found` response. Missing and cross-workspace payment requests are likewise
-indistinguishable.
+A successful `201 Created` response includes the stable public identifier,
+Stripe-hosted redirect URL, and provider identifiers used for correlation:
+
+```json
+{
+  "publicId": "stable-public-payment-id",
+  "description": "Engineering services",
+  "amount": 12500,
+  "currency": "usd",
+  "status": "PENDING",
+  "checkoutUrl": "https://checkout.stripe.com/c/pay/...",
+  "providerCheckoutSessionId": "cs_test_...",
+  "providerPaymentIntentId": null,
+  "createdAt": "2026-08-04T18:00:00.000Z",
+  "customer": {
+    "id": 42,
+    "name": "Ada Lovelace",
+    "email": "ada@example.com"
+  }
+}
+```
+
+`providerPaymentIntentId` can remain `null` until Stripe associates a Payment
+Intent with the Checkout Session. Every new payment begins in `PENDING`; later
+verified provider events advance the lifecycle.
+
+Repeating the request with the same `Idempotency-Key` in the same workspace
+returns the original payment and does not create another Checkout Session. Keys
+are isolated by workspace, so another workspace can safely use the same value.
+
+Use `GET /payment-requests` to list the authenticated workspace's payments and
+`GET /payment-requests/:publicId` to retrieve one. Referencing a missing or
+cross-workspace customer during creation returns the same `404 Not Found`
+response. Missing and cross-workspace payment requests are likewise
+indistinguishable. An unconnected workspace returns `400 Bad Request`; a
+connected account that is not payment-ready returns `409 Conflict`; and a
+Checkout provider failure returns `502 Bad Gateway`. None of these failures
+persists a partial payment request.
 
 The unauthenticated buyer route `GET /pay/:publicId` returns only:
 
@@ -134,6 +178,8 @@ through environment variables:
 STRIPE_SECRET_KEY=sk_test_platform_key
 STRIPE_CONNECT_REFRESH_URL=https://app.example.com/stripe/refresh
 STRIPE_CONNECT_RETURN_URL=https://app.example.com/stripe/return
+STRIPE_CHECKOUT_SUCCESS_URL=https://app.example.com/payments/success?session_id={CHECKOUT_SESSION_ID}
+STRIPE_CHECKOUT_CANCEL_URL=https://app.example.com/payments/cancel
 ```
 
 These values are platform configuration. Clients must never send Stripe API

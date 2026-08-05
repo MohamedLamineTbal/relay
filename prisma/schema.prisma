@@ -35,6 +35,7 @@ model Workspace {
 
   memberships WorkspaceMembership[]
   customers   Customer[]
+  payments    PaymentRequest[]
 }
 
 model WorkspaceMembership {
@@ -81,13 +82,23 @@ enum PaymentRequestStatus {
 }
 
 model PaymentRequest {
-  id          Int                  @id @default(autoincrement())
-  description String
-  amount      Int
-  status      PaymentRequestStatus @default(PENDING)
-  publicId    String               @unique @default(cuid())
-  createdAt   DateTime             @default(now())
+  id                        Int                  @id @default(autoincrement())
+  description               String
+  amount                    Int
+  currency                  String               @default("usd")
+  status                    PaymentRequestStatus @default(PENDING)
+  publicId                  String               @unique @default(cuid())
+  checkoutUrl               String?
+  providerCheckoutSessionId String?              @unique
+  providerPaymentIntentId   String?              @unique
+  idempotencyKey            String?
+  createdAt                 DateTime             @default(now())
 
   customerId Int
   customer   Customer @relation(fields: [customerId], references: [id])
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, idempotencyKey])
 }
