@@ -4,6 +4,14 @@ import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
+import {
+  PAYMENT_PROVIDER,
+  type PaymentProvider,
+} from '../src/payment-requests/payment-provider';
+import {
+  STRIPE_CONNECT_PROVIDER,
+  type StripeConnectProvider,
+} from '../src/stripe-connect/stripe-connect.provider';
 
 type LoginResponse = {
   accessToken: string;
@@ -20,18 +28,54 @@ type PaymentRequestResponse = {
   publicId: string;
   description: string;
   amount: number;
+  currency: string;
   status: 'PENDING' | 'PAID';
+  checkoutUrl: string;
+  providerCheckoutSessionId: string;
+  providerPaymentIntentId: string | null;
   createdAt: string;
   customer: Pick<CustomerResponse, 'id' | 'name' | 'email'>;
 };
 
 describe('Workspace isolation API', () => {
   let app: INestApplication<App>;
+  const stripeConnectProvider: StripeConnectProvider = {
+    createAccount() {
+      return Promise.resolve({ id: `acct_${randomUUID()}` });
+    },
+    createOnboardingLink() {
+      return Promise.resolve({
+        url: 'https://connect.stripe.test/workspace-isolation',
+      });
+    },
+    getAccountStatus() {
+      return Promise.resolve({
+        onboardingComplete: true,
+        paymentsReady: true,
+      });
+    },
+  };
+  const paymentProvider: PaymentProvider = {
+    createCheckout() {
+      const sessionId = `cs_${randomUUID()}`;
+
+      return Promise.resolve({
+        id: sessionId,
+        paymentIntentId: `pi_${randomUUID()}`,
+        url: `https://checkout.stripe.test/${sessionId}`,
+      });
+    },
+  };
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideProvider(STRIPE_CONNECT_PROVIDER)
+      .useValue(stripeConnectProvider)
+      .overrideProvider(PAYMENT_PROVIDER)
+      .useValue(paymentProvider)
+      .compile();
 
     app = moduleFixture.createNestApplication();
     await app.init();
@@ -51,7 +95,13 @@ describe('Workspace isolation API', () => {
       .send({ email, password })
       .expect(200);
 
-    return (login.body as LoginResponse).accessToken;
+    const accessToken = (login.body as LoginResponse).accessToken;
+    await request(app.getHttpServer())
+      .post('/stripe-connect/onboarding')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(201);
+
+    return accessToken;
   }
 
   it('creates a customer for the authenticated workspace without ownership identifiers', async () => {
@@ -145,9 +195,11 @@ describe('Workspace isolation API', () => {
     const response = await request(app.getHttpServer())
       .post('/payment-requests')
       .set('Authorization', `Bearer ${accessToken}`)
+      .set('Idempotency-Key', `workspace-create-${randomUUID()}`)
       .send({
         description: 'Engineering services',
         amount: 12500,
+        currency: 'usd',
         customerId: customer.id,
       })
       .expect(201);
@@ -155,6 +207,7 @@ describe('Workspace isolation API', () => {
     expect(response.body).toMatchObject({
       description: 'Engineering services',
       amount: 12500,
+      currency: 'usd',
       status: 'PENDING',
       customer: {
         id: customer.id,
@@ -166,9 +219,13 @@ describe('Workspace isolation API', () => {
       Object.keys(response.body as Record<string, unknown>).sort(),
     ).toEqual([
       'amount',
+      'checkoutUrl',
       'createdAt',
+      'currency',
       'customer',
       'description',
+      'providerCheckoutSessionId',
+      'providerPaymentIntentId',
       'publicId',
       'status',
     ]);
@@ -184,9 +241,11 @@ describe('Workspace isolation API', () => {
     const created = await request(app.getHttpServer())
       .post('/payment-requests')
       .set('Authorization', `Bearer ${accessToken}`)
+      .set('Idempotency-Key', `workspace-retrieve-${randomUUID()}`)
       .send({
         description: 'Consulting services',
         amount: 9800,
+        currency: 'usd',
         customerId: (customer.body as CustomerResponse).id,
       })
       .expect(201);
@@ -211,9 +270,11 @@ describe('Workspace isolation API', () => {
     const created = await request(app.getHttpServer())
       .post('/payment-requests')
       .set('Authorization', `Bearer ${ownerAccessToken}`)
+      .set('Idempotency-Key', `workspace-private-${randomUUID()}`)
       .send({
         description: 'Private payment',
         amount: 4500,
+        currency: 'usd',
         customerId: (customer.body as CustomerResponse).id,
       })
       .expect(201);
@@ -247,9 +308,11 @@ describe('Workspace isolation API', () => {
     const firstPayment = await request(app.getHttpServer())
       .post('/payment-requests')
       .set('Authorization', `Bearer ${firstAccessToken}`)
+      .set('Idempotency-Key', `workspace-first-${randomUUID()}`)
       .send({
         description: 'First workspace payment',
         amount: 3100,
+        currency: 'usd',
         customerId: (firstCustomer.body as CustomerResponse).id,
       })
       .expect(201);
@@ -257,9 +320,11 @@ describe('Workspace isolation API', () => {
     await request(app.getHttpServer())
       .post('/payment-requests')
       .set('Authorization', `Bearer ${secondAccessToken}`)
+      .set('Idempotency-Key', `workspace-second-${randomUUID()}`)
       .send({
         description: 'Second workspace payment',
         amount: 7200,
+        currency: 'usd',
         customerId: (secondCustomer.body as CustomerResponse).id,
       })
       .expect(201);
@@ -282,9 +347,11 @@ describe('Workspace isolation API', () => {
     const created = await request(app.getHttpServer())
       .post('/payment-requests')
       .set('Authorization', `Bearer ${accessToken}`)
+      .set('Idempotency-Key', `workspace-public-${randomUUID()}`)
       .send({
         description: 'Public invoice description',
         amount: 6400,
+        currency: 'usd',
         customerId: (customer.body as CustomerResponse).id,
       })
       .expect(201);
@@ -326,18 +393,22 @@ describe('Workspace isolation API', () => {
     const crossWorkspace = await request(app.getHttpServer())
       .post('/payment-requests')
       .set('Authorization', `Bearer ${otherAccessToken}`)
+      .set('Idempotency-Key', `workspace-cross-${randomUUID()}`)
       .send({
         description: 'Forbidden payment',
         amount: 2000,
+        currency: 'usd',
         customerId: (customer.body as CustomerResponse).id,
       })
       .expect(404);
     const missing = await request(app.getHttpServer())
       .post('/payment-requests')
       .set('Authorization', `Bearer ${otherAccessToken}`)
+      .set('Idempotency-Key', `workspace-missing-${randomUUID()}`)
       .send({
         description: 'Missing customer payment',
         amount: 2000,
+        currency: 'usd',
         customerId: 2147483647,
       })
       .expect(404);
