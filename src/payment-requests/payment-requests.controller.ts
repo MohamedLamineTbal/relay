@@ -125,6 +125,18 @@ export class PaymentRequestsController {
     );
   }
 
+  @Get('payment-requests/:publicId/timeline')
+  @UseGuards(BearerAuthGuard)
+  findTimeline(
+    @Param('publicId') publicId: string,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.paymentRequestsService.findTimeline(
+      publicId,
+      request.auth.workspace.id,
+    );
+  }
+
   @Get('pay/:publicId')
   findByPublicId(@Param('publicId') publicId: string) {
     return this.paymentRequestsService.findByPublicId(publicId);

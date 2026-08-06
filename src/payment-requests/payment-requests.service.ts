@@ -179,6 +179,48 @@ export class PaymentRequestsService {
     return paymentRequest;
   }
 
+  async findTimeline(publicId: string, workspaceId: string) {
+    const paymentRequest = await this.prisma.paymentRequest.findFirst({
+      where: { publicId, workspaceId },
+      select: {
+        publicId: true,
+        status: true,
+        events: {
+          orderBy: [{ occurredAt: 'asc' }, { providerEventId: 'asc' }],
+          select: {
+            providerEventId: true,
+            providerType: true,
+            type: true,
+            occurredAt: true,
+            resultingStatus: true,
+            providerCheckoutSessionId: true,
+            providerPaymentIntentId: true,
+          },
+        },
+      },
+    });
+
+    if (!paymentRequest) {
+      throw new NotFoundException('Payment request not found');
+    }
+
+    return {
+      publicId: paymentRequest.publicId,
+      currentStatus: paymentRequest.status,
+      events: paymentRequest.events.map((event) => ({
+        type: event.type,
+        resultingStatus: event.resultingStatus,
+        occurredAt: event.occurredAt,
+        providerReferences: {
+          eventId: event.providerEventId,
+          eventType: event.providerType,
+          checkoutSessionId: event.providerCheckoutSessionId,
+          paymentIntentId: event.providerPaymentIntentId,
+        },
+      })),
+    };
+  }
+
   async findByPublicId(publicId: string) {
     const paymentRequest = await this.prisma.paymentRequest.findUnique({
       where: { publicId },
