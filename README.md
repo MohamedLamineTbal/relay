@@ -262,6 +262,57 @@ The timeline exposes only normalized lifecycle data and safe provider reference
 IDs. It never includes raw webhook payloads, webhook secrets, API credentials,
 internal database IDs, or workspace ownership identifiers.
 
+## Outbound payment webhooks
+
+Configure or replace the authenticated workspace's single active HTTPS destination:
+
+```text
+PUT /webhook-destination
+Authorization: Bearer <accessToken>
+Content-Type: application/json
+
+{ "url": "https://example.com/payment-events" }
+```
+
+The response includes a new `signingSecret` once. Store it securely. Repeating
+the request replaces the previous secret. `GET /webhook-destination` returns the
+URL and timestamps but never returns the secret. Secrets are encrypted at rest
+using the 32-byte hex `WEBHOOK_SECRET_ENCRYPTION_KEY`. Destinations must use
+HTTPS and resolve only to public addresses. Delivery does not follow redirects.
+
+Supported lifecycle changes send an exact JSON body like:
+
+```json
+{
+  "id": "evt_...",
+  "type": "payment.paid",
+  "occurredAt": "2026-08-06T17:00:00.000Z",
+  "data": { "payment": { "publicId": "pay_...", "status": "PAID" } }
+}
+```
+
+Types are `payment.paid`, `payment.failed`, `payment.expired`, and
+`payment.refunded`. The request header is `Payment-Signature:
+t=<unix-seconds>,v1=<hex-hmac>`. Verify `v1` by computing HMAC-SHA256 with the
+signing secret over `<unix-seconds>.<exact raw JSON body>`, then compare the
+digests with a timing-safe comparison. Reject stale timestamps according to
+your application's tolerance.
+
+Only provider events received while a destination is active are eligible for
+delivery. The URL and signing secret active at event receipt are retained for
+that event, including when an out-of-order lifecycle event becomes valid later.
+
+`GET /webhook-deliveries` lists the authenticated workspace's attempts. Filter
+with `paymentPublicId` or `outcome=DELIVERED|FAILED`. Each entry includes the
+attempt number and time, destination URL, normalized event and payment
+references, outcome, HTTP response status when available, and a safe failure
+summary. A 2xx response is delivered; non-2xx, timeout, and network outcomes are
+failed. Destination failures never delay or change the successful acknowledgment
+of the inbound Stripe event. Delivery records are committed with the payment
+lifecycle update and a background worker recovers pending work. Delivery is
+therefore at least once: consumers should deduplicate retries using the payload's
+stable `id`.
+
 ## Stripe Connect API
 
 Configure the platform's Stripe credentials and authenticated return locations
@@ -274,6 +325,7 @@ STRIPE_CONNECT_RETURN_URL=https://app.example.com/stripe/return
 STRIPE_CHECKOUT_SUCCESS_URL=https://app.example.com/payments/success?session_id={CHECKOUT_SESSION_ID}
 STRIPE_CHECKOUT_CANCEL_URL=https://app.example.com/payments/cancel
 STRIPE_WEBHOOK_SECRET=whsec_platform_endpoint_secret
+WEBHOOK_SECRET_ENCRYPTION_KEY=64_hex_characters_for_a_32_byte_key
 ```
 
 These values are platform configuration. Clients must never send Stripe API

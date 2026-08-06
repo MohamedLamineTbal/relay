@@ -1,6 +1,7 @@
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import type { PaymentRequestStatus } from '../../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service';
+import { WebhookDeliveriesService } from '../webhook-deliveries/webhook-deliveries.service';
 import {
   InvalidWebhookSignatureError,
   STRIPE_WEBHOOK_PROVIDER,
@@ -47,6 +48,7 @@ export class WebhooksService {
     private readonly prisma: PrismaService,
     @Inject(STRIPE_WEBHOOK_PROVIDER)
     private readonly stripeWebhookProvider: StripeWebhookProvider,
+    private readonly webhookDeliveries: WebhookDeliveriesService,
   ) {}
 
   async process(payload: Buffer, signature: string) {
@@ -68,6 +70,9 @@ export class WebhooksService {
     const existingEvent = await this.findDuplicateResponse(event.id);
 
     if (existingEvent) {
+      void this.webhookDeliveries
+        .deliverPendingForEvent(event.id)
+        .catch(() => undefined);
       return existingEvent;
     }
 
@@ -108,6 +113,9 @@ export class WebhooksService {
 
     try {
       await this.recordMatchedEvent(event, workspace.id, payment.id);
+      void this.webhookDeliveries
+        .deliverPendingForPayment(payment.id)
+        .catch(() => undefined);
     } catch (error: unknown) {
       const duplicateResponse = await this.resolveUniqueEventRace(
         error,
@@ -115,6 +123,9 @@ export class WebhooksService {
       );
 
       if (duplicateResponse) {
+        void this.webhookDeliveries
+          .deliverPendingForEvent(event.id)
+          .catch(() => undefined);
         return duplicateResponse;
       }
 
@@ -195,6 +206,26 @@ export class WebhooksService {
       try {
         await this.prisma.$transaction(
           async (transaction) => {
+            const deliveryContext =
+              await transaction.paymentRequest.findUniqueOrThrow({
+                where: { id: paymentRequestId },
+                select: {
+                  publicId: true,
+                  workspace: {
+                    select: {
+                      webhookDestination: {
+                        select: {
+                          id: true,
+                          url: true,
+                          encryptedSigningSecret: true,
+                        },
+                      },
+                    },
+                  },
+                },
+              });
+            const activeDestination =
+              deliveryContext.workspace.webhookDestination;
             await transaction.paymentEvent.create({
               data: {
                 providerEventId: event.id,
@@ -205,6 +236,10 @@ export class WebhooksService {
                 providerPaymentIntentId: event.providerPaymentIntentId,
                 workspaceId,
                 paymentRequestId,
+                outboundDestinationId: activeDestination?.id,
+                outboundDestinationUrl: activeDestination?.url,
+                outboundEncryptedSigningSecret:
+                  activeDestination?.encryptedSigningSecret,
               },
             });
             const paymentEvents = await transaction.paymentEvent.findMany({
@@ -212,9 +247,13 @@ export class WebhooksService {
               orderBy: [{ occurredAt: 'asc' }, { providerEventId: 'asc' }],
               select: {
                 id: true,
+                providerEventId: true,
                 type: true,
                 occurredAt: true,
                 providerPaymentIntentId: true,
+                outboundDestinationId: true,
+                outboundDestinationUrl: true,
+                outboundEncryptedSigningSecret: true,
               },
             });
             let status: PaymentRequestStatus = 'PENDING';
@@ -227,7 +266,10 @@ export class WebhooksService {
                   paymentEvent.type as SupportedPaymentEventType
                 ];
 
-              if (transition.allowedFrom.includes(status)) {
+              const transitioned =
+                transition.allowedFrom.includes(status) &&
+                status !== transition.status;
+              if (transitioned) {
                 status = transition.status;
               }
 
@@ -239,6 +281,46 @@ export class WebhooksService {
                 where: { id: paymentEvent.id },
                 data: { resultingStatus: status },
               });
+
+              if (
+                transitioned &&
+                paymentEvent.outboundDestinationId &&
+                paymentEvent.outboundDestinationUrl &&
+                paymentEvent.outboundEncryptedSigningSecret
+              ) {
+                const eventType = `payment.${status.toLowerCase()}`;
+                const payload = JSON.stringify({
+                  id: paymentEvent.providerEventId,
+                  type: eventType,
+                  occurredAt: paymentEvent.occurredAt.toISOString(),
+                  data: {
+                    payment: { publicId: deliveryContext.publicId, status },
+                  },
+                });
+                await transaction.webhookDeliveryAttempt.upsert({
+                  where: {
+                    paymentEventId_attemptNumber: {
+                      paymentEventId: paymentEvent.id,
+                      attemptNumber: 1,
+                    },
+                  },
+                  update: {},
+                  create: {
+                    outcome: 'PENDING',
+                    attemptNumber: 1,
+                    destinationUrl: paymentEvent.outboundDestinationUrl,
+                    eventType,
+                    paymentPublicId: deliveryContext.publicId,
+                    paymentStatus: status,
+                    payload,
+                    encryptedSigningSecret:
+                      paymentEvent.outboundEncryptedSigningSecret,
+                    workspaceId,
+                    destinationId: paymentEvent.outboundDestinationId,
+                    paymentEventId: paymentEvent.id,
+                  },
+                });
+              }
             }
 
             await transaction.paymentRequest.update({
