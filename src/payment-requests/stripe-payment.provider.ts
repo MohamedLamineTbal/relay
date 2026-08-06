@@ -14,6 +14,14 @@ export class StripePaymentProvider implements PaymentProvider {
         mode: 'payment',
         payment_method_types: ['card'],
         customer_email: input.customerEmail ?? undefined,
+        metadata: {
+          payment_request_public_id: input.paymentRequestPublicId,
+        },
+        payment_intent_data: {
+          metadata: {
+            payment_request_public_id: input.paymentRequestPublicId,
+          },
+        },
         line_items: [
           {
             quantity: 1,

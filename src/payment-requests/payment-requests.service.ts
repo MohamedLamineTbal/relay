@@ -6,6 +6,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   STRIPE_CONNECT_PROVIDER,
@@ -98,6 +99,10 @@ export class PaymentRequestsService {
       throw new NotFoundException('Customer not found');
     }
 
+    const paymentRequestPublicId = `pay_${createHash('sha256')
+      .update(`${request.workspaceId}\0${request.idempotencyKey}`)
+      .digest('hex')}`;
+
     let checkout: CheckoutSession;
 
     try {
@@ -108,6 +113,7 @@ export class PaymentRequestsService {
         description: request.description,
         customerEmail: customer.email,
         idempotencyKey: `${request.workspaceId}:${request.idempotencyKey}`,
+        paymentRequestPublicId,
       });
     } catch {
       throw new BadGatewayException(
@@ -125,6 +131,7 @@ export class PaymentRequestsService {
           providerCheckoutSessionId: checkout.id,
           providerPaymentIntentId: checkout.paymentIntentId,
           idempotencyKey: request.idempotencyKey,
+          publicId: paymentRequestPublicId,
           customer: { connect: { id: customer.id } },
           workspace: { connect: { id: request.workspaceId } },
         },

@@ -7,6 +7,7 @@ export type CreateCheckoutInput = {
   description: string;
   customerEmail: string | null;
   idempotencyKey: string;
+  paymentRequestPublicId: string;
 };
 
 export type CheckoutSession = {

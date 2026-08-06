@@ -33,9 +33,10 @@ model Workspace {
   stripeAccountId String?  @unique
   createdAt       DateTime @default(now())
 
-  memberships WorkspaceMembership[]
-  customers   Customer[]
-  payments    PaymentRequest[]
+  memberships   WorkspaceMembership[]
+  customers     Customer[]
+  payments      PaymentRequest[]
+  paymentEvents PaymentEvent[]
 }
 
 model WorkspaceMembership {
@@ -79,6 +80,9 @@ model Customer {
 enum PaymentRequestStatus {
   PENDING
   PAID
+  FAILED
+  EXPIRED
+  REFUNDED
 }
 
 model PaymentRequest {
@@ -92,6 +96,7 @@ model PaymentRequest {
   providerCheckoutSessionId String?              @unique
   providerPaymentIntentId   String?              @unique
   idempotencyKey            String?
+  lifecycleUpdatedAt        DateTime?
   createdAt                 DateTime             @default(now())
 
   customerId Int
@@ -100,5 +105,28 @@ model PaymentRequest {
   workspaceId String
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
+  events PaymentEvent[]
+
   @@unique([workspaceId, idempotencyKey])
+}
+
+model PaymentEvent {
+  id                        Int                   @id @default(autoincrement())
+  providerEventId           String                @unique
+  providerType              String
+  type                      String
+  occurredAt                DateTime
+  resultingStatus           PaymentRequestStatus?
+  providerCheckoutSessionId String?
+  providerPaymentIntentId   String?
+  createdAt                 DateTime              @default(now())
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  paymentRequestId Int?
+  paymentRequest   PaymentRequest? @relation(fields: [paymentRequestId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([paymentRequestId, occurredAt])
 }

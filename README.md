@@ -169,6 +169,58 @@ The unauthenticated buyer route `GET /pay/:publicId` returns only:
 It does not expose customer identity, internal database identifiers, workspace
 ownership, or timestamps.
 
+## Stripe payment webhooks
+
+Configure the Stripe Connect event destination to send events to:
+
+```text
+POST /stripe/webhooks
+Stripe-Signature: <Stripe-generated signature>
+```
+
+This endpoint is intentionally unauthenticated because Stripe is the caller.
+The application verifies `Stripe-Signature` against the unmodified raw request
+body and `STRIPE_WEBHOOK_SECRET` before trusting or recording an event. A
+missing or invalid signature returns `400 Bad Request` without changing payment
+state or persisting a trusted event.
+
+Verified events are associated with a workspace by their connected Stripe
+account and with a payment by its Checkout Session ID, Payment Intent ID, or
+stable payment reference stored in Stripe metadata. Provider identifiers never
+match a payment in a different workspace.
+
+The supported lifecycle mapping is:
+
+| Stripe event                                  | Local result |
+| --------------------------------------------- | ------------ |
+| `checkout.session.completed`                  | `PAID`       |
+| `checkout.session.expired`                    | `EXPIRED`    |
+| `payment_intent.payment_failed`               | `FAILED`     |
+| `charge.refunded` for a fully refunded charge | `REFUNDED`   |
+
+Partial `charge.refunded` events and all other verified event types are
+recorded safely without changing payment state. Every provider event ID is
+recorded at most once. Repeated or simultaneous delivery receives a successful
+duplicate acknowledgment without repeating lifecycle effects.
+
+Events are ordered by their Stripe occurrence time, not delivery time. Older
+events remain available for auditability but cannot overwrite a newer result.
+`PAID` can only advance to `REFUNDED`; `EXPIRED` and `REFUNDED` do not regress.
+A failed attempt can advance to `PAID` when a later Checkout completion occurs.
+
+A handled event returns `200 OK`:
+
+```json
+{
+  "received": true,
+  "duplicate": false,
+  "handled": true
+}
+```
+
+For an unsupported or unmatched verified event, `handled` is `false`. On a
+retry of an already-recorded event, `duplicate` is `true`.
+
 ## Stripe Connect API
 
 Configure the platform's Stripe credentials and authenticated return locations
@@ -180,6 +232,7 @@ STRIPE_CONNECT_REFRESH_URL=https://app.example.com/stripe/refresh
 STRIPE_CONNECT_RETURN_URL=https://app.example.com/stripe/return
 STRIPE_CHECKOUT_SUCCESS_URL=https://app.example.com/payments/success?session_id={CHECKOUT_SESSION_ID}
 STRIPE_CHECKOUT_CANCEL_URL=https://app.example.com/payments/cancel
+STRIPE_WEBHOOK_SECRET=whsec_platform_endpoint_secret
 ```
 
 These values are platform configuration. Clients must never send Stripe API
