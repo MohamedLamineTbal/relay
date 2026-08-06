@@ -32,11 +32,25 @@ type CustomerResponse = { id: number };
 type PaymentResponse = { publicId: string };
 type ConfiguredDestination = { url: string; signingSecret: string };
 type DeliveryAttemptResponse = {
+  id: string;
   attemptNumber: number;
   outcome: string;
-  attemptedAt: string;
+  attemptedAt: string | null;
+  responseStatus: number | null;
+  failureSummary: string | null;
   destination: { url: string };
-  event: { paymentPublicId: string };
+  event: { id: string; type: string; paymentPublicId: string };
+  replay?: {
+    fromAttemptId: string;
+    requestedAt: string;
+    requestedBy: { email: string };
+  };
+};
+type ReplayAcceptedResponse = {
+  id: string;
+  attemptNumber: number;
+  outcome: 'PENDING';
+  replay: NonNullable<DeliveryAttemptResponse['replay']>;
 };
 
 describe('Workspace webhook deliveries', () => {
@@ -46,7 +60,10 @@ describe('Workspace webhook deliveries', () => {
   let paymentIntentId = '';
   const events = new Map<string, VerifiedPaymentEvent>();
   const outboundRequests: OutboundWebhookRequest[] = [];
-  let deliveryResult: { status: number } | Error | 'HANG' = { status: 204 };
+  let deliveryResult:
+    { status: number } | Promise<{ status: number }> | Error | 'HANG' = {
+    status: 204,
+  };
   let resolvedAddresses = ['8.8.8.8'];
   const stripeConnectProvider: StripeConnectProvider = {
     createAccount: () => Promise.resolve({ id: connectedAccountId }),
@@ -76,6 +93,7 @@ describe('Workspace webhook deliveries', () => {
       if (deliveryResult === 'HANG') {
         return new Promise(() => undefined);
       }
+      if (deliveryResult instanceof Promise) return deliveryResult;
       return deliveryResult instanceof Error
         ? Promise.reject(deliveryResult)
         : Promise.resolve(deliveryResult);
@@ -129,6 +147,23 @@ describe('Workspace webhook deliveries', () => {
     return (login.body as LoginResponse).accessToken;
   }
 
+  async function registerOwnerWithIdentity() {
+    const email = `owner-${randomUUID()}@example.com`;
+    const password = 'correct horse battery staple';
+    await request(app.getHttpServer())
+      .post('/auth/register')
+      .send({ email, password })
+      .expect(201);
+    const login = await request(app.getHttpServer())
+      .post('/auth/login')
+      .send({ email, password })
+      .expect(200);
+    return {
+      email,
+      accessToken: (login.body as LoginResponse).accessToken,
+    };
+  }
+
   async function createPayment(accessToken: string) {
     await request(app.getHttpServer())
       .post('/stripe-connect/onboarding')
@@ -159,6 +194,26 @@ describe('Workspace webhook deliveries', () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     throw new Error(`Expected ${count} outbound webhook request(s)`);
+  }
+
+  async function waitForDeliveryHistory(
+    accessToken: string,
+    count: number,
+  ): Promise<DeliveryAttemptResponse[]> {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const response = await request(app.getHttpServer())
+        .get('/webhook-deliveries')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200);
+      const history = response.body as unknown as DeliveryAttemptResponse[];
+      if (
+        history.length >= count &&
+        history.every(({ outcome }) => outcome !== 'PENDING')
+      )
+        return history;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error(`Expected ${count} webhook delivery history entries`);
   }
 
   async function deliverPaidEvent(accessToken: string, signature: string) {
@@ -602,6 +657,285 @@ describe('Workspace webhook deliveries', () => {
         ({ body }) => (JSON.parse(body) as { type: string }).type,
       ),
     ).toEqual(['payment.refunded']);
+  });
+
+  it('replays a failed delivery to the current destination with an immutable audit trail', async () => {
+    const owner = await registerOwnerWithIdentity();
+    await request(app.getHttpServer())
+      .put('/webhook-destination')
+      .set('Authorization', `Bearer ${owner.accessToken}`)
+      .send({ url: 'https://hooks.example.test/original-failure' })
+      .expect(200);
+    deliveryResult = { status: 503 };
+    await deliverPaidEvent(owner.accessToken, 'replay-source-event');
+    const [original] = await waitForDeliveryHistory(owner.accessToken, 1);
+    expect(original.outcome).toBe('FAILED');
+    const originalRequestBody = outboundRequests[0].body;
+
+    const configured = await request(app.getHttpServer())
+      .put('/webhook-destination')
+      .set('Authorization', `Bearer ${owner.accessToken}`)
+      .send({ url: 'https://hooks.example.test/replay-current' })
+      .expect(200);
+    const currentSecret = (configured.body as unknown as ConfiguredDestination)
+      .signingSecret;
+    outboundRequests.length = 0;
+    deliveryResult = { status: 204 };
+
+    const replay = await request(app.getHttpServer())
+      .post(`/webhook-deliveries/${original.id}/replay`)
+      .set('Authorization', `Bearer ${owner.accessToken}`)
+      .expect(202);
+    const replayBody = replay.body as unknown as ReplayAcceptedResponse;
+    expect(replayBody).toMatchObject({
+      attemptNumber: 2,
+      outcome: 'PENDING',
+      replay: {
+        fromAttemptId: original.id,
+        requestedBy: { email: owner.email },
+      },
+    });
+    expect(replayBody.id).not.toHaveLength(0);
+    expect(Number.isNaN(Date.parse(replayBody.replay.requestedAt))).toBe(false);
+    await waitForOutboundRequestCount(1);
+
+    const delivered = outboundRequests[0];
+    expect(delivered.url).toBe('https://hooks.example.test/replay-current');
+    expect(delivered.body).toBe(originalRequestBody);
+    const [timestampPart, signaturePart] =
+      delivered.headers['Payment-Signature'].split(',');
+    expect(signaturePart).toBe(
+      `v1=${createHmac('sha256', currentSecret)
+        .update(`${timestampPart.slice(2)}.${delivered.body}`)
+        .digest('hex')}`,
+    );
+
+    const history = await waitForDeliveryHistory(owner.accessToken, 2);
+    expect(history[0]).toEqual(original);
+    expect(history[1]).toMatchObject({
+      id: replayBody.id,
+      attemptNumber: 2,
+      outcome: 'DELIVERED',
+      destination: { url: 'https://hooks.example.test/replay-current' },
+      event: original.event,
+      replay: replayBody.replay,
+    });
+  });
+
+  it('rejects replay of a successfully delivered attempt', async () => {
+    const accessToken = await registerOwner();
+    await request(app.getHttpServer())
+      .put('/webhook-destination')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ url: 'https://hooks.example.test/already-delivered' })
+      .expect(200);
+    await deliverPaidEvent(accessToken, 'delivered-replay-source');
+    const [original] = await waitForDeliveryHistory(accessToken, 1);
+    expect(original.outcome).toBe('DELIVERED');
+
+    await request(app.getHttpServer())
+      .post(`/webhook-deliveries/${original.id}/replay`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(409, {
+        message: 'Only failed webhook deliveries can be replayed',
+        error: 'Conflict',
+        statusCode: 409,
+      });
+
+    const history = await waitForDeliveryHistory(accessToken, 1);
+    expect(history).toEqual([original]);
+  });
+
+  it('records a failed replay without changing payment lifecycle history', async () => {
+    const accessToken = await registerOwner();
+    await request(app.getHttpServer())
+      .put('/webhook-destination')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ url: 'https://hooks.example.test/replay-failure' })
+      .expect(200);
+    deliveryResult = { status: 503 };
+    const source = await deliverPaidEvent(
+      accessToken,
+      'failed-replay-source-event',
+    );
+    const [original] = await waitForDeliveryHistory(accessToken, 1);
+    const timelineBefore = await request(app.getHttpServer())
+      .get(`/payment-requests/${source.payment.publicId}/timeline`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200);
+
+    outboundRequests.length = 0;
+    deliveryResult = { status: 502 };
+    await request(app.getHttpServer())
+      .post(`/webhook-deliveries/${original.id}/replay`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(202);
+    await waitForOutboundRequestCount(1);
+
+    const history = await waitForDeliveryHistory(accessToken, 2);
+    expect(history[0]).toEqual(original);
+    expect(history[1]).toMatchObject({
+      attemptNumber: 2,
+      outcome: 'FAILED',
+      responseStatus: 502,
+      failureSummary: 'Destination returned HTTP 502',
+      event: original.event,
+      replay: { fromAttemptId: original.id },
+    });
+    const timelineAfter = await request(app.getHttpServer())
+      .get(`/payment-requests/${source.payment.publicId}/timeline`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200);
+    expect(timelineAfter.body).toEqual(timelineBefore.body);
+    expect(timelineAfter.body).toMatchObject({
+      currentStatus: 'PAID',
+      events: [{ providerReferences: { eventId: source.providerEventId } }],
+    });
+  });
+
+  it('preserves history and rejects replay when the current destination is missing', async () => {
+    const accessToken = await registerOwner();
+    await request(app.getHttpServer())
+      .put('/webhook-destination')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ url: 'https://hooks.example.test/remove-before-replay' })
+      .expect(200);
+    deliveryResult = { status: 503 };
+    await deliverPaidEvent(accessToken, 'missing-replay-destination-event');
+    const [original] = await waitForDeliveryHistory(accessToken, 1);
+
+    await request(app.getHttpServer())
+      .delete('/webhook-destination')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(204);
+    await request(app.getHttpServer())
+      .get('/webhook-destination')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(404);
+    expect(await waitForDeliveryHistory(accessToken, 1)).toEqual([original]);
+
+    await request(app.getHttpServer())
+      .post(`/webhook-deliveries/${original.id}/replay`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(409, {
+        message: 'Configure a webhook destination before replaying',
+        error: 'Conflict',
+        statusCode: 409,
+      });
+    expect(await waitForDeliveryHistory(accessToken, 1)).toEqual([original]);
+  });
+
+  it('does not reveal or replay another workspace delivery attempt', async () => {
+    const firstToken = await registerOwner();
+    await request(app.getHttpServer())
+      .put('/webhook-destination')
+      .set('Authorization', `Bearer ${firstToken}`)
+      .send({ url: 'https://hooks.example.test/first-workspace-replay' })
+      .expect(200);
+    deliveryResult = { status: 503 };
+    await deliverPaidEvent(firstToken, 'private-replay-source-event');
+    const [original] = await waitForDeliveryHistory(firstToken, 1);
+
+    const secondToken = await registerOwner();
+    await request(app.getHttpServer())
+      .put('/webhook-destination')
+      .set('Authorization', `Bearer ${secondToken}`)
+      .send({ url: 'https://hooks.example.test/second-workspace-replay' })
+      .expect(200);
+    outboundRequests.length = 0;
+    deliveryResult = { status: 204 };
+
+    await request(app.getHttpServer())
+      .post(`/webhook-deliveries/${original.id}/replay`)
+      .set('Authorization', `Bearer ${secondToken}`)
+      .expect(404, {
+        message: 'Webhook delivery not found',
+        error: 'Not Found',
+        statusCode: 404,
+      });
+    await request(app.getHttpServer())
+      .get('/webhook-deliveries')
+      .set('Authorization', `Bearer ${secondToken}`)
+      .expect(200, []);
+    expect(outboundRequests).toHaveLength(0);
+    expect(await waitForDeliveryHistory(firstToken, 1)).toEqual([original]);
+  });
+
+  it('shows an accepted replay audit record while delivery is still pending', async () => {
+    const owner = await registerOwnerWithIdentity();
+    await request(app.getHttpServer())
+      .put('/webhook-destination')
+      .set('Authorization', `Bearer ${owner.accessToken}`)
+      .send({ url: 'https://hooks.example.test/pending-replay' })
+      .expect(200);
+    deliveryResult = { status: 503 };
+    await deliverPaidEvent(owner.accessToken, 'pending-replay-source');
+    const [original] = await waitForDeliveryHistory(owner.accessToken, 1);
+
+    outboundRequests.length = 0;
+    let completeDelivery: (result: { status: number }) => void = () =>
+      undefined;
+    deliveryResult = new Promise((resolve) => {
+      completeDelivery = resolve;
+    });
+    const replay = await request(app.getHttpServer())
+      .post(`/webhook-deliveries/${original.id}/replay`)
+      .set('Authorization', `Bearer ${owner.accessToken}`)
+      .expect(202);
+    const replayBody = replay.body as unknown as ReplayAcceptedResponse;
+
+    const history = await request(app.getHttpServer())
+      .get('/webhook-deliveries?outcome=PENDING')
+      .set('Authorization', `Bearer ${owner.accessToken}`)
+      .expect(200);
+    expect(history.body).toEqual([
+      expect.objectContaining({
+        id: replayBody.id,
+        attemptNumber: 2,
+        outcome: 'PENDING',
+        replay: {
+          fromAttemptId: original.id,
+          requestedAt: replayBody.replay.requestedAt,
+          requestedBy: { email: owner.email },
+        },
+      }),
+    ]);
+    completeDelivery({ status: 204 });
+    await waitForDeliveryHistory(owner.accessToken, 2);
+  });
+
+  it('allocates distinct audit attempts for simultaneous replay requests', async () => {
+    const accessToken = await registerOwner();
+    await request(app.getHttpServer())
+      .put('/webhook-destination')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ url: 'https://hooks.example.test/concurrent-replay' })
+      .expect(200);
+    deliveryResult = { status: 503 };
+    await deliverPaidEvent(accessToken, 'concurrent-replay-source');
+    const [original] = await waitForDeliveryHistory(accessToken, 1);
+
+    outboundRequests.length = 0;
+    deliveryResult = { status: 204 };
+    const responses = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        request(app.getHttpServer())
+          .post(`/webhook-deliveries/${original.id}/replay`)
+          .set('Authorization', `Bearer ${accessToken}`)
+          .expect(202),
+      ),
+    );
+    const replayAttempts = responses.map(
+      ({ body }) => body as unknown as ReplayAcceptedResponse,
+    );
+    expect(
+      replayAttempts
+        .map(({ attemptNumber }) => attemptNumber)
+        .sort((first, second) => first - second),
+    ).toEqual([2, 3, 4, 5, 6]);
+    expect(new Set(replayAttempts.map(({ id }) => id)).size).toBe(5);
+    await waitForOutboundRequestCount(5);
+    await waitForDeliveryHistory(accessToken, 6);
   });
 
   afterAll(async () => app?.close());

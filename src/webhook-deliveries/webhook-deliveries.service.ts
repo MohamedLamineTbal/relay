@@ -67,6 +67,10 @@ export class WebhookDeliveriesService {
     return destination;
   }
 
+  async removeDestination(workspaceId: string) {
+    await this.prisma.webhookDestination.deleteMany({ where: { workspaceId } });
+  }
+
   deliverPendingForEvent(providerEventId: string) {
     return this.deliverPending(providerEventId);
   }
@@ -79,13 +83,19 @@ export class WebhookDeliveriesService {
     return this.deliverPending();
   }
 
+  deliverPendingAttempt(attemptId: string) {
+    return this.deliverPending(undefined, undefined, attemptId);
+  }
+
   private async deliverPending(
     providerEventId?: string,
     paymentRequestId?: number,
+    attemptId?: string,
   ) {
     const staleBefore = new Date(Date.now() - 60_000);
     const attempts = await this.prisma.webhookDeliveryAttempt.findMany({
       where: {
+        ...(attemptId ? { id: attemptId } : {}),
         outcome: 'PENDING',
         paymentEvent: {
           ...(providerEventId ? { providerEventId } : {}),
@@ -188,12 +198,12 @@ export class WebhookDeliveriesService {
   async list(
     workspaceId: string,
     paymentPublicId?: string,
-    outcome?: 'DELIVERED' | 'FAILED',
+    outcome?: 'PENDING' | 'DELIVERED' | 'FAILED',
   ) {
     const attempts = await this.prisma.webhookDeliveryAttempt.findMany({
       where: {
         workspaceId,
-        outcome: outcome ?? { in: ['DELIVERED', 'FAILED'] },
+        ...(outcome ? { outcome } : {}),
         ...(paymentPublicId ? { paymentPublicId } : {}),
       },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -208,6 +218,9 @@ export class WebhookDeliveriesService {
         paymentEvent: { select: { providerEventId: true } },
         eventType: true,
         paymentPublicId: true,
+        replayedFromAttemptId: true,
+        replayRequestedAt: true,
+        replayRequestedByEmail: true,
       },
     });
     return attempts.map((attempt) => ({
@@ -223,6 +236,17 @@ export class WebhookDeliveriesService {
         type: attempt.eventType,
         paymentPublicId: attempt.paymentPublicId,
       },
+      ...(attempt.replayedFromAttemptId &&
+      attempt.replayRequestedAt &&
+      attempt.replayRequestedByEmail
+        ? {
+            replay: {
+              fromAttemptId: attempt.replayedFromAttemptId,
+              requestedAt: attempt.replayRequestedAt,
+              requestedBy: { email: attempt.replayRequestedByEmail },
+            },
+          }
+        : {}),
     }));
   }
 }
