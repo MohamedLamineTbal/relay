@@ -235,6 +235,7 @@ describe('Workspace webhook deliveries', () => {
       .send({ stripe: true })
       .expect(200);
     await waitForOutboundRequestCount(expectedRequestCount);
+    await waitForDeliveryHistory(accessToken, expectedRequestCount);
     return { payment, providerEventId };
   }
 

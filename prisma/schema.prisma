@@ -39,6 +39,44 @@ model Workspace {
   paymentEvents           PaymentEvent[]
   webhookDestination      WebhookDestination?
   webhookDeliveryAttempts WebhookDeliveryAttempt[]
+  alerts                  Alert[]
+}
+
+enum AlertType {
+  PAYMENT_PROCESSING_FAILED
+  WEBHOOK_DELIVERY_FAILED
+}
+
+enum AlertStatus {
+  ACTIVE
+  ACKNOWLEDGED
+}
+
+model Alert {
+  id               String      @id @default(cuid())
+  type             AlertType
+  status           AlertStatus @default(ACTIVE)
+  deduplicationKey String      @unique
+  createdAt        DateTime    @default(now())
+  acknowledgedAt   DateTime?
+
+  acknowledgedByUserId Int?
+  acknowledgedByEmail  String?
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  paymentRequestId Int?
+  paymentRequest   PaymentRequest? @relation(fields: [paymentRequestId], references: [id], onDelete: SetNull)
+  paymentPublicId  String?
+
+  deliveryAttemptId     String?
+  deliveryAttempt       WebhookDeliveryAttempt? @relation(fields: [deliveryAttemptId], references: [id], onDelete: SetNull)
+  deliveryAttemptNumber Int?
+
+  @@index([workspaceId, status, createdAt])
+  @@index([paymentRequestId])
+  @@index([deliveryAttemptId])
 }
 
 model WebhookDestination {
@@ -86,6 +124,7 @@ model WebhookDeliveryAttempt {
   replayRequestedAt       DateTime?
   replayRequestedByUserId Int?
   replayRequestedByEmail  String?
+  alerts                  Alert[]
 
   @@unique([paymentEventId, attemptNumber])
   @@index([workspaceId, attemptedAt])
@@ -160,6 +199,7 @@ model PaymentRequest {
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   events PaymentEvent[]
+  alerts Alert[]
 
   @@unique([workspaceId, idempotencyKey])
 }

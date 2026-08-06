@@ -1,5 +1,9 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { createHmac, randomBytes } from 'node:crypto';
+import type {
+  Prisma,
+  WebhookDeliveryAttempt,
+} from '../../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service';
 import { decryptWebhookSecret, encryptWebhookSecret } from './webhook-secret';
 import {
@@ -28,6 +32,11 @@ const pendingAttemptSelect = {
   destinationId: true,
   paymentEventId: true,
 } as const;
+
+type FailedDeliveryAttempt = Pick<
+  WebhookDeliveryAttempt,
+  'id' | 'attemptNumber' | 'paymentPublicId' | 'workspaceId'
+>;
 
 @Injectable()
 export class WebhookDeliveriesService {
@@ -125,6 +134,7 @@ export class WebhookDeliveriesService {
             },
           );
           if (finalized.count !== 1) return null;
+          await this.recordDeliveryFailureAlert(transaction, attempt);
           return transaction.webhookDeliveryAttempt.create({
             data: {
               outcome: 'PENDING',
@@ -188,11 +198,35 @@ export class WebhookDeliveriesService {
             ? 'Destination request timed out'
             : 'Destination network request failed';
       }
-      await this.prisma.webhookDeliveryAttempt.update({
-        where: { id: attempt.id },
-        data: { outcome, responseStatus, failureSummary },
+      await this.prisma.$transaction(async (transaction) => {
+        await transaction.webhookDeliveryAttempt.update({
+          where: { id: attempt.id },
+          data: { outcome, responseStatus, failureSummary },
+        });
+        if (outcome === 'FAILED') {
+          await this.recordDeliveryFailureAlert(transaction, attempt);
+        }
       });
     }
+  }
+
+  private recordDeliveryFailureAlert(
+    transaction: Prisma.TransactionClient,
+    attempt: FailedDeliveryAttempt,
+  ) {
+    const deduplicationKey = `webhook-delivery-failed:${attempt.id}`;
+    return transaction.alert.upsert({
+      where: { deduplicationKey },
+      update: {},
+      create: {
+        type: 'WEBHOOK_DELIVERY_FAILED',
+        deduplicationKey,
+        workspaceId: attempt.workspaceId,
+        paymentPublicId: attempt.paymentPublicId,
+        deliveryAttemptId: attempt.id,
+        deliveryAttemptNumber: attempt.attemptNumber,
+      },
+    });
   }
 
   async list(

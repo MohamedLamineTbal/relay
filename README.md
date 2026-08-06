@@ -332,6 +332,36 @@ while the destination is slow. Only `FAILED` attempts can be replayed; a
 non-failed attempt or missing current destination returns `409 Conflict`.
 Missing and cross-workspace attempt IDs return the same `404 Not Found` response.
 
+## Operational alerts
+
+`GET /alerts` returns the authenticated workspace's active operational alerts,
+newest first. Use `GET /alerts?status=ACTIVE` or
+`GET /alerts?status=ACKNOWLEDGED` to select an alert inbox. Alert types are
+`PAYMENT_PROCESSING_FAILED` for supported payment failures and
+`WEBHOOK_DELIVERY_FAILED` for failed outbound attempts. Responses contain only
+safe payment public IDs, delivery attempt IDs/numbers, status, and audit
+timestamps; they never expose workspace IDs, secrets, or raw provider errors.
+
+A payment lifecycle failure and its alert are committed together. Likewise, a
+failed delivery outcome and its alert are committed together. Repeated
+observations use a stable incident key: one payment request has one payment
+failure alert, and one delivery attempt has one delivery failure alert. A failed
+replay is a new attempt and therefore a distinct incident. Successful payments
+and deliveries do not generate alerts, and acknowledging an incident does not
+cause a duplicate observation to reactivate it.
+
+Acknowledge an active alert without deleting its history:
+
+```text
+POST /alerts/<alertId>/acknowledge
+Authorization: Bearer <accessToken>
+```
+
+Acknowledgement is idempotent and returns the alert with `ACKNOWLEDGED` status,
+the original creation time, acknowledgement time, and an immutable snapshot of
+the authenticated owner's identity. Missing and cross-workspace IDs return the
+same `404 Not Found` response.
+
 ## Stripe Connect API
 
 Configure the platform's Stripe credentials and authenticated return locations

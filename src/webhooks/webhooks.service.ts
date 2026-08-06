@@ -321,6 +321,22 @@ export class WebhooksService {
                   },
                 });
               }
+
+              if (transitioned && status === 'FAILED') {
+                await transaction.alert.upsert({
+                  where: {
+                    deduplicationKey: `payment-processing-failed:${paymentRequestId}`,
+                  },
+                  update: {},
+                  create: {
+                    type: 'PAYMENT_PROCESSING_FAILED',
+                    deduplicationKey: `payment-processing-failed:${paymentRequestId}`,
+                    workspaceId,
+                    paymentRequestId,
+                    paymentPublicId: deliveryContext.publicId,
+                  },
+                });
+              }
             }
 
             await transaction.paymentRequest.update({

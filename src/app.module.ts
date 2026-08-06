@@ -8,6 +8,7 @@ import { AuthModule } from './auth/auth.module';
 import { StripeConnectModule } from './stripe-connect/stripe-connect.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { WebhookDeliveriesModule } from './webhook-deliveries/webhook-deliveries.module';
+import { AlertsModule } from './alerts/alerts.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { WebhookDeliveriesModule } from './webhook-deliveries/webhook-deliveries
     StripeConnectModule,
     WebhooksModule,
     WebhookDeliveriesModule,
+    AlertsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
