@@ -221,6 +221,47 @@ A handled event returns `200 OK`:
 For an unsupported or unmatched verified event, `handled` is `false`. On a
 retry of an already-recorded event, `duplicate` is `true`.
 
+### Payment event timeline
+
+An authenticated workspace owner can inspect the normalized history for one of
+their payments:
+
+```text
+GET /payment-requests/:publicId/timeline
+Authorization: Bearer <accessToken>
+```
+
+The response reports the current payment status and the events that explain it:
+
+```json
+{
+  "publicId": "pay_...",
+  "currentStatus": "REFUNDED",
+  "events": [
+    {
+      "type": "CHECKOUT_COMPLETED",
+      "resultingStatus": "PAID",
+      "occurredAt": "2026-08-06T10:00:00.000Z",
+      "providerReferences": {
+        "eventId": "evt_...",
+        "eventType": "checkout.session.completed",
+        "checkoutSessionId": "cs_...",
+        "paymentIntentId": "pi_..."
+      }
+    }
+  ]
+}
+```
+
+Entries are ordered by `occurredAt`, then by provider event ID when occurrence
+times match. Duplicate provider delivery does not create a second entry. A new
+payment returns an empty `events` array. Missing and cross-workspace payment
+timelines return the same `404 Not Found` response.
+
+The timeline exposes only normalized lifecycle data and safe provider reference
+IDs. It never includes raw webhook payloads, webhook secrets, API credentials,
+internal database IDs, or workspace ownership identifiers.
+
 ## Stripe Connect API
 
 Configure the platform's Stripe credentials and authenticated return locations
