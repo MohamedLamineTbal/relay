@@ -75,14 +75,22 @@ model WebhookDeliveryAttempt {
   encryptedSigningSecret String
   workspaceId            String
   workspace              Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  destinationId          Int
-  destination            WebhookDestination     @relation(fields: [destinationId], references: [id], onDelete: Cascade)
+  destinationId          Int?
+  destination            WebhookDestination?    @relation(fields: [destinationId], references: [id], onDelete: SetNull)
   paymentEventId         Int
   paymentEvent           PaymentEvent           @relation(fields: [paymentEventId], references: [id], onDelete: Cascade)
+
+  replayedFromAttemptId   String?
+  replayedFromAttempt     WebhookDeliveryAttempt?  @relation("WebhookAttemptReplays", fields: [replayedFromAttemptId], references: [id], onDelete: Restrict)
+  replayAttempts          WebhookDeliveryAttempt[] @relation("WebhookAttemptReplays")
+  replayRequestedAt       DateTime?
+  replayRequestedByUserId Int?
+  replayRequestedByEmail  String?
 
   @@unique([paymentEventId, attemptNumber])
   @@index([workspaceId, attemptedAt])
   @@index([paymentEventId])
+  @@index([replayedFromAttemptId])
 }
 
 model WorkspaceMembership {

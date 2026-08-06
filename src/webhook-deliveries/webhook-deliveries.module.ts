@@ -14,6 +14,7 @@ import {
 } from './destination-resolver';
 import { OutboundDestinationPolicy } from './outbound-destination.policy';
 import { WebhookDeliveryWorker } from './webhook-delivery.worker';
+import { WebhookReplaysService } from './webhook-replays.service';
 
 @Module({
   imports: [PrismaModule, AuthModule],
@@ -21,6 +22,7 @@ import { WebhookDeliveryWorker } from './webhook-delivery.worker';
   providers: [
     WebhookDeliveriesService,
     WebhookDeliveryWorker,
+    WebhookReplaysService,
     OutboundDestinationPolicy,
     { provide: DESTINATION_RESOLVER, useClass: NodeDestinationResolver },
     {

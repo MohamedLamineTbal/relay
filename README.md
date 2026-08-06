@@ -279,6 +279,8 @@ the request replaces the previous secret. `GET /webhook-destination` returns the
 URL and timestamps but never returns the secret. Secrets are encrypted at rest
 using the 32-byte hex `WEBHOOK_SECRET_ENCRYPTION_KEY`. Destinations must use
 HTTPS and resolve only to public addresses. Delivery does not follow redirects.
+`DELETE /webhook-destination` removes the active configuration with `204 No
+Content` while retaining immutable delivery history.
 
 Supported lifecycle changes send an exact JSON body like:
 
@@ -303,8 +305,8 @@ delivery. The URL and signing secret active at event receipt are retained for
 that event, including when an out-of-order lifecycle event becomes valid later.
 
 `GET /webhook-deliveries` lists the authenticated workspace's attempts. Filter
-with `paymentPublicId` or `outcome=DELIVERED|FAILED`. Each entry includes the
-attempt number and time, destination URL, normalized event and payment
+with `paymentPublicId` or `outcome=PENDING|DELIVERED|FAILED`. Each entry includes
+the attempt number and time, destination URL, normalized event and payment
 references, outcome, HTTP response status when available, and a safe failure
 summary. A 2xx response is delivered; non-2xx, timeout, and network outcomes are
 failed. Destination failures never delay or change the successful acknowledgment
@@ -312,6 +314,23 @@ of the inbound Stripe event. Delivery records are committed with the payment
 lifecycle update and a background worker recovers pending work. Delivery is
 therefore at least once: consumers should deduplicate retries using the payload's
 stable `id`.
+
+Replay a failed attempt by its `id` from delivery history:
+
+```text
+POST /webhook-deliveries/<attemptId>/replay
+Authorization: Bearer <accessToken>
+```
+
+The API returns `202 Accepted` after creating a new `PENDING` attempt. Replay
+retains the exact logical event body but snapshots and uses the destination URL
+and signing secret configured when replay is requested. The original attempt and
+payment timeline are never changed. Delivery history links the new attempt to
+the original and records the request time and an immutable snapshot of the
+authenticated owner's identity. `PENDING` history is visible immediately, even
+while the destination is slow. Only `FAILED` attempts can be replayed; a
+non-failed attempt or missing current destination returns `409 Conflict`.
+Missing and cross-workspace attempt IDs return the same `404 Not Found` response.
 
 ## Stripe Connect API
 
