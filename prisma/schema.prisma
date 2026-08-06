@@ -33,10 +33,56 @@ model Workspace {
   stripeAccountId String?  @unique
   createdAt       DateTime @default(now())
 
-  memberships   WorkspaceMembership[]
-  customers     Customer[]
-  payments      PaymentRequest[]
-  paymentEvents PaymentEvent[]
+  memberships             WorkspaceMembership[]
+  customers               Customer[]
+  payments                PaymentRequest[]
+  paymentEvents           PaymentEvent[]
+  webhookDestination      WebhookDestination?
+  webhookDeliveryAttempts WebhookDeliveryAttempt[]
+}
+
+model WebhookDestination {
+  id                     Int      @id @default(autoincrement())
+  url                    String
+  encryptedSigningSecret String
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  workspaceId String                   @unique
+  workspace   Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  attempts    WebhookDeliveryAttempt[]
+}
+
+enum WebhookDeliveryOutcome {
+  PENDING
+  DELIVERED
+  FAILED
+}
+
+model WebhookDeliveryAttempt {
+  id                     String                 @id @default(cuid())
+  createdAt              DateTime               @default(now())
+  attemptedAt            DateTime?
+  outcome                WebhookDeliveryOutcome
+  attemptNumber          Int                    @default(1)
+  responseStatus         Int?
+  failureSummary         String?
+  destinationUrl         String
+  eventType              String
+  paymentPublicId        String
+  paymentStatus          PaymentRequestStatus
+  payload                String
+  encryptedSigningSecret String
+  workspaceId            String
+  workspace              Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  destinationId          Int
+  destination            WebhookDestination     @relation(fields: [destinationId], references: [id], onDelete: Cascade)
+  paymentEventId         Int
+  paymentEvent           PaymentEvent           @relation(fields: [paymentEventId], references: [id], onDelete: Cascade)
+
+  @@unique([paymentEventId, attemptNumber])
+  @@index([workspaceId, attemptedAt])
+  @@index([paymentEventId])
 }
 
 model WorkspaceMembership {
@@ -111,21 +157,25 @@ model PaymentRequest {
 }
 
 model PaymentEvent {
-  id                        Int                   @id @default(autoincrement())
-  providerEventId           String                @unique
-  providerType              String
-  type                      String
-  occurredAt                DateTime
-  resultingStatus           PaymentRequestStatus?
-  providerCheckoutSessionId String?
-  providerPaymentIntentId   String?
-  createdAt                 DateTime              @default(now())
+  id                             Int                   @id @default(autoincrement())
+  providerEventId                String                @unique
+  providerType                   String
+  type                           String
+  occurredAt                     DateTime
+  resultingStatus                PaymentRequestStatus?
+  providerCheckoutSessionId      String?
+  providerPaymentIntentId        String?
+  createdAt                      DateTime              @default(now())
+  outboundDestinationId          Int?
+  outboundDestinationUrl         String?
+  outboundEncryptedSigningSecret String?
 
   workspaceId String
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   paymentRequestId Int?
-  paymentRequest   PaymentRequest? @relation(fields: [paymentRequestId], references: [id], onDelete: Cascade)
+  paymentRequest   PaymentRequest?          @relation(fields: [paymentRequestId], references: [id], onDelete: Cascade)
+  deliveryAttempts WebhookDeliveryAttempt[]
 
   @@index([workspaceId])
   @@index([paymentRequestId, occurredAt])

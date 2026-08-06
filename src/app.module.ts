@@ -7,6 +7,7 @@ import { PaymentRequestsModule } from './payment-requests/payment-requests.modul
 import { AuthModule } from './auth/auth.module';
 import { StripeConnectModule } from './stripe-connect/stripe-connect.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
+import { WebhookDeliveriesModule } from './webhook-deliveries/webhook-deliveries.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     AuthModule,
     StripeConnectModule,
     WebhooksModule,
+    WebhookDeliveriesModule,
   ],
   controllers: [AppController],
   providers: [AppService],
