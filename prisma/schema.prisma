@@ -1,0 +1,322 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  password  String
+  createdAt DateTime @default(now())
+
+  membership WorkspaceMembership?
+  sessions   Session[]
+}
+
+enum WorkspaceRole {
+  OWNER
+}
+
+model Workspace {
+  id              String   @id @default(cuid())
+  name            String
+  stripeAccountId String?  @unique
+  createdAt       DateTime @default(now())
+
+  memberships             WorkspaceMembership[]
+  stripeConnections       StripeConnection[]
+  customers               Customer[]
+  payments                PaymentRequest[]
+  paymentEvents           PaymentEvent[]
+  webhookDestination      WebhookDestination?
+  webhookDeliveryAttempts WebhookDeliveryAttempt[]
+  paymentEmailDeliveries  PaymentEmailDelivery[]
+  alerts                  Alert[]
+}
+
+enum StripeConnectionState {
+  ACTIVE
+  REPLACEMENT_PENDING
+  REPLACED
+  DISCONNECTED
+  ABANDONED
+}
+
+model StripeConnection {
+  id                String                @id @default(cuid())
+  providerAccountId String                @unique
+  state             StripeConnectionState
+  createdAt         DateTime              @default(now())
+  activatedAt       DateTime?
+  deactivatedAt     DateTime?
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  paymentRequests PaymentRequest[]
+
+  @@index([workspaceId, state, createdAt])
+}
+
+enum AlertType {
+  PAYMENT_PROCESSING_FAILED
+  WEBHOOK_DELIVERY_FAILED
+}
+
+enum AlertStatus {
+  ACTIVE
+  ACKNOWLEDGED
+}
+
+model Alert {
+  id               String      @id @default(cuid())
+  type             AlertType
+  status           AlertStatus @default(ACTIVE)
+  deduplicationKey String      @unique
+  createdAt        DateTime    @default(now())
+  acknowledgedAt   DateTime?
+
+  acknowledgedByUserId Int?
+  acknowledgedByEmail  String?
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  paymentRequestId Int?
+  paymentRequest   PaymentRequest? @relation(fields: [paymentRequestId], references: [id], onDelete: SetNull)
+  paymentPublicId  String?
+
+  deliveryAttemptId     String?
+  deliveryAttempt       WebhookDeliveryAttempt? @relation(fields: [deliveryAttemptId], references: [id], onDelete: SetNull)
+  deliveryAttemptNumber Int?
+
+  @@index([workspaceId, status, createdAt])
+  @@index([paymentRequestId])
+  @@index([deliveryAttemptId])
+}
+
+model WebhookDestination {
+  id                     Int      @id @default(autoincrement())
+  url                    String
+  encryptedSigningSecret String
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  workspaceId String                   @unique
+  workspace   Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  attempts    WebhookDeliveryAttempt[]
+}
+
+enum WebhookDeliveryOutcome {
+  PENDING
+  DELIVERED
+  FAILED
+}
+
+model WebhookDeliveryAttempt {
+  id                     String                 @id @default(cuid())
+  createdAt              DateTime               @default(now())
+  attemptedAt            DateTime?
+  outcome                WebhookDeliveryOutcome
+  attemptNumber          Int                    @default(1)
+  responseStatus         Int?
+  failureSummary         String?
+  destinationUrl         String
+  eventType              String
+  paymentPublicId        String
+  paymentStatus          PaymentRequestStatus
+  payload                String
+  encryptedSigningSecret String
+  workspaceId            String
+  workspace              Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  destinationId          Int?
+  destination            WebhookDestination?    @relation(fields: [destinationId], references: [id], onDelete: SetNull)
+  paymentEventId         Int
+  paymentEvent           PaymentEvent           @relation(fields: [paymentEventId], references: [id], onDelete: Cascade)
+
+  replayedFromAttemptId   String?
+  replayedFromAttempt     WebhookDeliveryAttempt?  @relation("WebhookAttemptReplays", fields: [replayedFromAttemptId], references: [id], onDelete: Restrict)
+  replayAttempts          WebhookDeliveryAttempt[] @relation("WebhookAttemptReplays")
+  replayRequestedAt       DateTime?
+  replayRequestedByUserId Int?
+  replayRequestedByEmail  String?
+  alerts                  Alert[]
+
+  @@unique([paymentEventId, attemptNumber])
+  @@index([workspaceId, attemptedAt])
+  @@index([paymentEventId])
+  @@index([replayedFromAttemptId])
+}
+
+model WorkspaceMembership {
+  id        Int           @id @default(autoincrement())
+  role      WorkspaceRole @default(OWNER)
+  createdAt DateTime      @default(now())
+
+  userId      Int       @unique
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Customer {
+  id        Int      @id @default(autoincrement())
+  name      String
+  email     String?
+  createdAt DateTime @default(now())
+
+  workspaceId     String
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  paymentRequests PaymentRequest[]
+
+  @@index([workspaceId])
+}
+
+enum PaymentRequestStatus {
+  PENDING
+  PAID
+  FAILED
+  EXPIRED
+  REFUNDED
+}
+
+model PaymentRequest {
+  id                        Int                  @id @default(autoincrement())
+  description               String
+  internalReference         String?
+  amount                    Int
+  currency                  String               @default("usd")
+  status                    PaymentRequestStatus @default(PENDING)
+  publicId                  String               @unique @default(cuid())
+  checkoutUrl               String?
+  providerCheckoutSessionId String?              @unique
+  providerPaymentIntentId   String?              @unique
+  idempotencyKey            String?
+  sendEmailRequested        Boolean              @default(false)
+  emailMessage              String?
+  lifecycleUpdatedAt        DateTime?
+  createdAt                 DateTime             @default(now())
+
+  customerId Int
+  customer   Customer @relation(fields: [customerId], references: [id])
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  stripeConnectionId String?
+  stripeConnection   StripeConnection? @relation(fields: [stripeConnectionId], references: [id], onDelete: SetNull)
+
+  events          PaymentEvent[]
+  alerts          Alert[]
+  emailDeliveries PaymentEmailDelivery[]
+
+  @@unique([workspaceId, idempotencyKey])
+  @@index([stripeConnectionId])
+}
+
+enum PaymentEmailDeliveryStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum PaymentEmailAttemptOutcome {
+  SENT
+  TRANSIENT_FAILURE
+  PERMANENT_FAILURE
+}
+
+model PaymentEmailDelivery {
+  id                String                     @id @default(cuid())
+  status            PaymentEmailDeliveryStatus @default(PENDING)
+  recipientEmail    String
+  ownerMessage      String?
+  idempotencyKey    String                     @unique
+  providerMessageId String?
+  failureSummary    String?
+  attemptCount      Int                        @default(0)
+  nextAttemptAt     DateTime                   @default(now())
+  claimedAt         DateTime?
+  createdAt         DateTime                   @default(now())
+  attemptedAt       DateTime?
+  sentAt            DateTime?
+  requestedByUserId Int
+  requestedByEmail  String
+
+  paymentRequestId Int
+  paymentRequest   PaymentRequest @relation(fields: [paymentRequestId], references: [id], onDelete: Cascade)
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  attempts PaymentEmailAttempt[]
+
+  @@index([workspaceId, createdAt])
+  @@index([paymentRequestId, createdAt])
+  @@index([status, nextAttemptAt])
+}
+
+model PaymentEmailAttempt {
+  id                String                     @id @default(cuid())
+  attemptNumber     Int
+  attemptedAt       DateTime
+  outcome           PaymentEmailAttemptOutcome
+  providerMessageId String?
+  failureCode       String?
+  failureSummary    String?
+
+  deliveryId String
+  delivery   PaymentEmailDelivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  @@unique([deliveryId, attemptNumber])
+  @@index([deliveryId, attemptedAt])
+}
+
+model PaymentEvent {
+  id                             Int                   @id @default(autoincrement())
+  providerEventId                String                @unique
+  providerType                   String
+  type                           String
+  occurredAt                     DateTime
+  resultingStatus                PaymentRequestStatus?
+  providerCheckoutSessionId      String?
+  providerPaymentIntentId        String?
+  createdAt                      DateTime              @default(now())
+  outboundDestinationId          Int?
+  outboundDestinationUrl         String?
+  outboundEncryptedSigningSecret String?
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  paymentRequestId Int?
+  paymentRequest   PaymentRequest?          @relation(fields: [paymentRequestId], references: [id], onDelete: Cascade)
+  deliveryAttempts WebhookDeliveryAttempt[]
+
+  @@index([workspaceId])
+  @@index([paymentRequestId, occurredAt])
+}
