@@ -35,7 +35,7 @@ Failed outbound webhook deliveries are recorded and can be replayed later from t
 
 Payment links can also be sent directly to customers by email using Resend, with delivery attempts and failures tracked by Relay.
 
----
+
 
 ## Main features
 
@@ -72,7 +72,7 @@ Payment links can also be sent directly to customers by email using Resend, with
 * **Idempotency and event deduplication**
   Protect against duplicate payment creation and repeated Stripe events.
 
----
+
 
 
 
@@ -84,7 +84,7 @@ The **NestJS backend** contains the business logic for authentication, customers
 
 **Stripe** handles account connection and card payments, while **Resend** is used to send payment links by email.
 
----
+
 
 ## Tech stack
 
@@ -115,7 +115,7 @@ The **NestJS backend** contains the business logic for authentication, customers
 * Supertest
 * Swagger / OpenAPI
 
----
+
 
 # Running Relay locally
 
@@ -132,7 +132,7 @@ You also need:
 * a Stripe test account
 * a Resend account if you want to test email delivery
 
----
+
 ## 1. Install the backend
 
 ```bash
@@ -172,7 +172,7 @@ RESEND_API_KEY="re_..."
 EMAIL_FROM="Relay <onboarding@resend.dev>"
 ```
 
----
+
 
 ## 2. Prepare the database
 
@@ -189,7 +189,7 @@ npx prisma generate
 npx prisma migrate deploy
 ```
 
----
+
 
 ## 3. Start the backend
 
@@ -209,7 +209,6 @@ Swagger documentation is available at:
 http://localhost:3000/api
 ```
 
----
 
 ## 4. Start Stripe webhooks
 
@@ -235,7 +234,6 @@ Restart the backend after changing the value.
 
 Keep the Stripe listener running while testing payments locally. Stripe cannot send webhook events directly to localhost, so the listener forwards them to the Relay backend.
 
----
 
 ## 5. Start the frontend
 
@@ -254,7 +252,6 @@ The frontend runs on:
 http://localhost:3001
 ```
 
----
 
 ## Try the complete flow
 
@@ -269,7 +266,7 @@ Once PostgreSQL, the backend, the frontend, and the Stripe listener are running:
 7. Return to Relay.
 8. Check the updated payment status and event timeline.
 
----
+
 
 ## Testing
 
@@ -291,7 +288,6 @@ Run test coverage:
 npm run test:cov
 ```
 
----
 
 ## API documentation
 
